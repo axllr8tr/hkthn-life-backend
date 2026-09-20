@@ -1,0 +1,17 @@
+[project]
+name = "llm-agents-for-real-final"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mesa[rec]>=3.5.1",
+    "numpy>=2.5.3",
+]
+
+[project.scripts]
+llm-agents-for-real-final = "llm_agents_for_real_final:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
