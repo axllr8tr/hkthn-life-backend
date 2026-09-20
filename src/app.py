@@ -21,12 +21,6 @@ async def websocket_endpoint(websocket: WebSocket):
         
         while True:
             model.step()            
-            
-            model.random.choice(model.agents).walk("left")
-            model.random.choice(model.agents).walk("right")
-            model.random.choice(model.agents).walk("top")
-            model.random.choice(model.agents).walk("down")
-
 
             await websocket.send_json([serialize_agent(agent) for agent in model.agents])
             

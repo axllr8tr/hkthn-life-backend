@@ -257,7 +257,8 @@ class WorldModel(mesa.Model):
         height: int = 50,
         num_agents: int = 50,
         seed: Optional[int] = None,
-        agent_llm: Optional[str | BaseChatModel] = "ollama:qwen2.5:1.5b-instruct-q4_0"
+        agent_llm: Optional[str | BaseChatModel] = GigaChat(credentials='MDFhMGI5OTAtNWVlMy03ZjI3LWJiNDktMDk5ZGQxMjI3N2E4OjQyOGM3NTViLWEwZTctNDEyYi05M2U5LTc2MGNhYjM2NDNkNw==', model="GigaChat-3-Ultra", verify_ssl_certs=False)
+
     ):
         super().__init__(seed=seed)
 
