@@ -34,13 +34,21 @@ class PersonAgent(mesa.Agent):
         saturation: float = 100.0,
     ):
         super().__init__(model)
-
         self.hp = hp
         self.strength = strength
         self.intelligence = intelligence
         self.saturation = saturation
 
         self.message_queue: List[dict] = []
+        self.message_read: List[dict] = []
+
+    @property
+    def x(self):
+        return self.cell.coordinate[0]
+
+    @property
+    def y(self):
+        return self.cell.coordinate[1]
 
     def get_nearby_agents(self, radius: int = 10) -> List["PersonAgent"]:
         """
@@ -143,6 +151,7 @@ class PersonAgent(mesa.Agent):
         Return and clear all messages currently in the queue.
         """
         messages = self.message_queue.copy()
+        self.message_read.extend(messages)
         self.message_queue.clear()
         return messages
 
@@ -241,7 +250,7 @@ class WorldModel(mesa.Model):
         self.steps += 1
 
 
-if name == "__main__":
+if __name__ == "__main__":
 
     model = WorldModel(
         width=50,
