@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import List, Optional, Deque, Literal
+from langchain.chat_models import BaseChatModel
+from langchain_gigachat import GigaChat
 import numpy as np
 import mesa
+from langchain.agents import create_agent
+from langchain.tools import tool
 from mesa.space import MultiGrid
 
 @dataclass
@@ -27,11 +32,12 @@ class PersonAgent(mesa.Agent):
 
     def __init__(
         self,
+        llm: str | BaseChatModel,
         model: "WorldModel",
         hp: float = 100.0,
         strength: float = 10.0,
         intelligence: float = 10.0,
-        saturation: float = 100.0,
+        saturation: float = 100.0
     ):
         super().__init__(model)
         self.hp = hp
@@ -39,16 +45,54 @@ class PersonAgent(mesa.Agent):
         self.intelligence = intelligence
         self.saturation = saturation
 
+        self.history: Deque[str] = deque(maxlen=10)
         self.message_queue: List[dict] = []
         self.message_read: List[dict] = []
+        self.llm_tools = self._build_tools()
+        self.talk_tools = [t for t in self.llm_tools if t.name == "talk"]
+        # Tools must be passed at create_agent time. Empty list = no tool loop.
+        # invoke(..., tools=...) is ignored by the compiled graph.
+        self.llm_agent = create_agent(llm, tools=self.llm_tools)
+        self.intel_agent = create_agent(llm, tools=self.talk_tools)
 
     @property
     def x(self):
-        return self.cell.coordinate[0]
+        return self.pos[0]
 
     @property
     def y(self):
-        return self.cell.coordinate[1]
+        return self.pos[1]
+
+    def get_system_prompt(self, is_intel: bool = False) -> str:
+        return f"""You are an agent (ID: {self.unique_id}), a living entity in a grid world.
+Attributes:
+- Health: {self.hp:.2f}/100
+- Saturation: {self.saturation:.2f}/100
+- Intelligence: {self.intelligence:.2f}
+- Strength: {self.strength:.2f}
+
+Grid Location: ({self.x}, {self.y})
+World Bounds: ({self.model.width - 1}, {self.model.height - 1})
+Entities in Vision Field:
+- Nearby Agents: {'\n'.join(f"ID {i.unique_id} at ({i.x}, {i.y}) hp={i.hp:.0f}" for i in self.get_nearby_agents()) if self.get_nearby_agents() else 'No one nearby.'}
+
+Recent Memories:
+{chr(10).join(self.history) if self.history else "No recent memories."}
+
+Recent Messages from Other Agents:
+{chr(10).join([f"ID {x.get('sender')}: {x.get('message')}" for x in self.message_queue]) if self.message_queue else "No recent messages."}
+""" + (
+"""
+Goal: Survive, thrive, eat when hungry, interact with others, and stay safe.
+You MUST take exactly ONE action by calling a tool. Do not reply with plain text.
+If you have nothing else to do, call talk with a short thought. 
+"""
+        if not is_intel
+        else
+"""
+Goal: Assess the situation and say something to other agents around you.
+You MUST call the talk tool. Do not reply with plain text.
+""")
 
     def get_nearby_agents(self, radius: int = 10) -> List["PersonAgent"]:
         """
@@ -70,9 +114,17 @@ class PersonAgent(mesa.Agent):
             if isinstance(agent, PersonAgent) and agent.hp > 0
         ]
 
+    def _run_llm(self, *, intel: bool = False):
+        graph = self.intel_agent if intel else self.llm_agent
+        result = graph.invoke(
+            {"messages": [{"role": "user", "content": self.get_system_prompt(intel)}]},
+            {"recursion_limit": 8},
+        )
+        # print(result)
+        return result
+
     def intelligence_tick(self):
-        nearby_agents = self.get_nearby_agents(radius=10)
-        
+        self._run_llm(intel=True)
 
     def step(self):
         self.tick()
@@ -86,80 +138,105 @@ class PersonAgent(mesa.Agent):
 
         if self.hp <= 0:
             self.die()
-
-    def hit(self, other: "PersonAgent"):
-        if self.hp <= 0:
             return
 
-        if other.hp <= 0:
-            return
+        self._run_llm(intel=False)
 
-        if other is self:
-            return
+    def _build_tools(self):
+        agent = self
 
-        # Avoid division by zero.
-        if other.strength <= 0:
-            damage = self.strength * 10
-        else:
-            damage = (self.strength / other.strength) * 10
+        @tool(return_direct=True)
+        def hit(target_id: int) -> str:
+            """Attack a nearby living agent by unique ID. Target must be adjacent (1 cell)."""
+            if agent.hp <= 0:
+                return "You are dead and cannot attack."
+            if target_id == agent.unique_id:
+                return "You cannot attack yourself."
 
-        other.hp -= damage
-
-        if other.hp <= 0:
-            other.die()
-
-        return damage
-
-    def walk(self, d) -> bool:
-        x, y = self.pos
-        if d == "left":
-            dest = (x - 1, y)
-        elif d == "top":
-            dest = (x, y + 1)
-        elif d == "right":
-            dest = (x + 1, y)
-        elif d == "bottom":
-            dest = (x, y - 1)
-        else:
-            return
-
-        if self.model.grid.out_of_bounds(dest):
-            return
-        if not self.model.grid.is_cell_empty(dest):
-            return
-        self.model.grid.move_agent(self, dest)
-
-    def talk(self, message: str):
-        """
-        Send a message to every agent within 10 cells.
-
-        The message is placed in each recipient's message queue.
-        """
-
-        nearby_agents = self.get_nearby_agents(radius=10)
-
-        for other in nearby_agents:
-            other.message_queue.append(
-                {
-                    "sender": self.unique_id,
-                    "message": message,
-                }
+            other = next(
+                (a for a in agent.get_nearby_agents(radius=1) if a.unique_id == target_id),
+                None,
             )
+            if other is None:
+                return f"No living adjacent agent with ID {target_id}."
+
+            if other.strength <= 0:
+                damage = agent.strength * 10
+            else:
+                damage = (agent.strength / other.strength) * 10
+
+            other.hp -= damage
+            agent.history.append(
+                f"Entity ID {agent.unique_id} attacked {other.unique_id} and dealt {damage:.2f} damage"
+            )
+            if other.hp <= 0:
+                other.die()
+            return f"Dealt {damage:.2f} damage to agent {target_id}."
+
+        @tool(return_direct=True)
+        def walk(direction: Literal["left", "right", "top", "bottom"]) -> str:
+            """Move one cell. direction must be left, right, top, or bottom."""
+            x, y = agent.pos
+            dest = {
+                "left": (x - 1, y),
+                "right": (x + 1, y),
+                "top": (x, y + 1),
+                "bottom": (x, y - 1),
+            }.get(direction)
+            if dest is None:
+                return "Unknown direction. Use left, right, top, or bottom."
+            if agent.model.grid.out_of_bounds(dest):
+                return "Cannot walk out of bounds."
+            if not agent.model.grid.is_cell_empty(dest):
+                return "Destination cell is occupied."
+            agent.model.grid.move_agent(agent, dest)
+            agent.history.append(f"Entity ID {agent.unique_id} walked {direction} to {dest}")
+            return f"Moved {direction} to {dest}."
+
+        @tool(return_direct=True)
+        def talk(message: str) -> str:
+            """Send a message to every agent within 10 cells."""
+            nearby_agents = agent.get_nearby_agents(radius=10)
+            for other in nearby_agents:
+                other.message_queue.append(
+                    {
+                        "sender": agent.unique_id,
+                        "message": message,
+                    }
+                )
+            agent.history.append(f"Entity ID {agent.unique_id} said: {message}")
+            if not nearby_agents:
+                return "No one nearby heard you."
+            return f"Sent message to {len(nearby_agents)} nearby agent(s)."
+
+        @tool(return_direct=True)
+        def eat() -> str:
+            """Forage in place and restore saturation. Use this when hungry."""
+            gained = 20.0
+            agent.saturation = min(100.0, agent.saturation + gained)
+            agent.history.append(
+                f"Entity ID {agent.unique_id} ate and saturation is {agent.saturation:.2f}"
+            )
+            return f"Saturation is now {agent.saturation:.2f}/100."
+
+        return [hit, walk, talk, eat]
 
     def read_messages(self) -> List[dict]:
-        """
-        Return and clear all messages currently in the queue.
-        """
+        """Return and clear all messages currently in the queue."""
         messages = self.message_queue.copy()
         self.message_read.extend(messages)
         self.message_queue.clear()
         return messages
 
+    def terminate(self):
+        """Removes you, the agent, from the simulation"""
+        self.die()
+
     def die(self):
         """Remove the agent from the simulation."""
         if self.pos is not None:
             self.model.grid.remove_agent(self)
-
+        self.history.append(f"Entity ID {self.unique_id} died")
         self.remove()
 
 
@@ -176,6 +253,7 @@ class WorldModel(mesa.Model):
         height: int = 50,
         num_agents: int = 50,
         seed: Optional[int] = None,
+        agent_llm: Optional[str | BaseChatModel] = "ollama:qwen2.5:1.5b-instruct-q4_0"
     ):
         super().__init__(seed=seed)
 
@@ -192,7 +270,8 @@ class WorldModel(mesa.Model):
         # Create agents.
         for _ in range(num_agents):
             agent = PersonAgent(
-                self,
+                model=self,
+                llm=agent_llm,
                 hp=self.random.uniform(80, 100),
                 strength=self.random.uniform(5, 15),
                 intelligence=self.random.uniform(5, 15),
@@ -213,7 +292,7 @@ class WorldModel(mesa.Model):
             if agent.pos is not None and agent.hp > 0
         ]
         if not agents:
-            return
+            return []
 
         count = min(count, len(agents))
         weights = np.array(
@@ -255,8 +334,9 @@ if __name__ == "__main__":
     model = WorldModel(
         width=50,
         height=50,
-        num_agents=100,
+        num_agents=50,
         seed=42,
+        agent_llm=GigaChat(credentials='your-token-here', model="GigaChat-3-Ultra", verify_ssl_certs=False)
     )
 
     for step in range(20):
@@ -275,11 +355,17 @@ if __name__ == "__main__":
         if alive_agents:
             agent = alive_agents[0]
 
+            messages = chr(10).join(
+                f"ID {m.get('sender')}: {m.get('message')}"
+                for m in agent.message_queue
+            )
             print(
                 f"Agent {agent.unique_id}: "
                 f"pos={agent.pos}, "
                 f"hp={agent.hp:.2f}, "
                 f"strength={agent.strength:.2f}, "
                 f"intelligence={agent.intelligence:.2f}, "
-                f"saturation={agent.saturation:.2f}"
+                f"saturation={agent.saturation:.2f}\n"
+                f"\tmessages={messages}\n"
+                f"\tevents={chr(10).join(agent.history)}\n"
             )
