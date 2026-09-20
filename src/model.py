@@ -44,11 +44,11 @@ class PersonAgent(mesa.Agent):
 
     @property
     def x(self):
-        return self.cell.coordinate[0]
+        return self.pos[0]
 
     @property
     def y(self):
-        return self.cell.coordinate[1]
+        return self.pos[1]
 
     def get_nearby_agents(self, radius: int = 10) -> List["PersonAgent"]:
         """
@@ -86,6 +86,7 @@ class PersonAgent(mesa.Agent):
 
         if self.hp <= 0:
             self.die()
+        self.read_messages()
 
     def hit(self, other: "PersonAgent"):
         if self.hp <= 0:
@@ -194,8 +195,8 @@ class WorldModel(mesa.Model):
             agent = PersonAgent(
                 self,
                 hp=self.random.uniform(80, 100),
-                strength=self.random.uniform(5, 15),
-                intelligence=self.random.uniform(5, 15),
+                strength=self.random.uniform(5, 90),
+                intelligence=self.random.uniform(5, 90),
                 saturation=self.random.uniform(50, 100),
             )
 
@@ -212,8 +213,6 @@ class WorldModel(mesa.Model):
             for agent in self.agents
             if agent.pos is not None and agent.hp > 0
         ]
-        if not agents:
-            return
 
         count = min(count, len(agents))
         weights = np.array(
