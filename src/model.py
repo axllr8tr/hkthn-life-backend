@@ -161,7 +161,7 @@ class WorldModel(mesa.Model):
     """
 
     SATURATION_DECAY = 1.0
-[20.09.2026 09:01] Hackathon guy: def __init__(
+    def __init__(
         self,
         width: int = 50,
         height: int = 50,
