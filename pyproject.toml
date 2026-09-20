@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi[standard]>=0.141.1",
+    "langchain[ollama]>=1.4.2",
+    "langchain-gigachat>=0.5.1",
     "mesa[rec]>=3.5.1",
     "numpy>=2.5.3",
 ]
